@@ -376,12 +376,10 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
 
         # Reset previous metadata
         self.clearData() # Ensure any previous data is gone.
-
-        self.addMetaDataEntry("type", "material")
-        self.addMetaDataEntry("base_file", self.id)
-
-        # TODO: Add material verfication
-        self.addMetaDataEntry("status", "unknown")
+        meta_data = {}
+        meta_data["type"] = "material"
+        meta_data["base_file"] = self.id
+        meta_data["status"] = "unknown"  # TODO: Add material verfication
 
         inherits = data.find("./um:inherits", self.__namespaces)
         if inherits is not None:
@@ -399,23 +397,20 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
                 label = entry.find("./um:label", self.__namespaces)
 
                 if label is not None:
-                    self.setName(label.text)
+                    self._name = label.text
                 else:
-                    self.setName(self._profile_name(material.text, color.text))
-
-                self.addMetaDataEntry("brand", brand.text)
-                self.addMetaDataEntry("material", material.text)
-                self.addMetaDataEntry("color_name", color.text)
-
+                    self._name = self._profile_name(material.text, color.text)
+                meta_data["brand"] = brand.text
+                meta_data["material"] = material.text
+                meta_data["color_name"] = color.text
                 continue
+            meta_data[tag_name] = entry.text
 
-            self.addMetaDataEntry(tag_name, entry.text)
+        if not "description" in meta_data:
+            meta_data["description"] = ""
 
-        if not "description" in self.getMetaData():
-            self.addMetaDataEntry("description", "")
-
-        if not "adhesion_info" in self.getMetaData():
-            self.addMetaDataEntry("adhesion_info", "")
+        if not "adhesion_info" in meta_data:
+            meta_data["adhesion_info"] = ""
 
         property_values = {}
         properties = data.iterfind("./um:properties/*", self.__namespaces)
@@ -425,8 +420,7 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
 
         diameter = float(property_values.get("diameter", 2.85)) # In mm
         density = float(property_values.get("density", 1.3)) # In g/cm3
-
-        self.addMetaDataEntry("properties", property_values)
+        meta_data["properties"] = property_values
 
         self.setDefinition(UM.Settings.ContainerRegistry.getInstance().findDefinitionContainers(id = "fdmprinter")[0])
 
@@ -436,16 +430,16 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
         for entry in settings:
             key = entry.get("key")
             if key in self.__material_property_setting_map:
-                self.setProperty(self.__material_property_setting_map[key], "value", entry.text)
                 global_setting_values[self.__material_property_setting_map[key]] = entry.text
             elif key in self.__unmapped_settings:
                 if key == "hardware compatible":
                     global_compatibility = parseBool(entry.text)
             else:
                 Logger.log("d", "Unsupported material setting %s", key)
+        self._cached_values = global_setting_values
 
-        self.addMetaDataEntry("compatible", global_compatibility)
-
+        meta_data["compatible"] = global_compatibility
+        self.setMetaData(meta_data)
         self._dirty = False
 
         machines = data.iterfind("./um:settings/um:machine", self.__namespaces)
@@ -462,6 +456,9 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
                         machine_compatibility = parseBool(entry.text)
                 else:
                     Logger.log("d", "Unsupported material setting %s", key)
+
+            cached_machine_setting_properties = global_setting_values.copy()
+            cached_machine_setting_properties.update(machine_setting_values)
 
             identifiers = machine.iterfind("./um:machine_identifier", self.__namespaces)
             for identifier in identifiers:
@@ -488,17 +485,14 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
                     else:
                         new_material = XmlMaterialProfile(new_material_id)
 
-                    new_material.setName(self.getName())
+                    # Update the private directly, as we want to prevent the lookup that is done when using setName
+                    new_material._name = self.getName()
                     new_material.setMetaData(copy.deepcopy(self.getMetaData()))
                     new_material.setDefinition(definition)
                     # Don't use setMetadata, as that overrides it for all materials with same base file
                     new_material.getMetaData()["compatible"] = machine_compatibility
 
-                    for key, value in global_setting_values.items():
-                        new_material.setProperty(key, "value", value)
-
-                    for key, value in machine_setting_values.items():
-                        new_material.setProperty(key, "value", value)
+                    new_material.setCachedValues(cached_machine_setting_properties)
 
                     new_material._dirty = False
                     if not materials:
@@ -541,21 +535,18 @@ class XmlMaterialProfile(UM.Settings.InstanceContainer):
                     else:
                         new_hotend_material = XmlMaterialProfile(new_hotend_id)
 
-                    new_hotend_material.setName(self.getName())
+                    # Update the private directly, as we want to prevent the lookup that is done when using setName
+                    new_hotend_material._name = self.getName()
                     new_hotend_material.setMetaData(copy.deepcopy(self.getMetaData()))
                     new_hotend_material.setDefinition(definition)
                     new_hotend_material.addMetaDataEntry("variant", variant_containers[0].id)
                     # Don't use setMetadata, as that overrides it for all materials with same base file
                     new_hotend_material.getMetaData()["compatible"] = hotend_compatibility
 
-                    for key, value in global_setting_values.items():
-                        new_hotend_material.setProperty(key, "value", value)
+                    cached_hotend_setting_properties = cached_machine_setting_properties.copy()
+                    cached_hotend_setting_properties.update(hotend_setting_values)
 
-                    for key, value in machine_setting_values.items():
-                        new_hotend_material.setProperty(key, "value", value)
-
-                    for key, value in hotend_setting_values.items():
-                        new_hotend_material.setProperty(key, "value", value)
+                    new_hotend_material.setCachedValues(cached_hotend_setting_properties)
 
                     new_hotend_material._dirty = False
                     if not materials:  # It was not added yet, do so now.
